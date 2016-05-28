@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+set -eu
+
+DISK_DEVICE=da0
+POOL_NAME=zroot
+
+########################################################################
+
+if [ $UID -ne 0 ]; then
+    echo 'Please run me as root!'
+    exit 1
+fi
+
+read -p "I will destroy all data on /dev/${DISK_DEVICE}! Continue (yes/no)? " choice
+case "$choice" in
+    yes)
+        : ;;
+    *)
+        echo 'Aborted!'
+        exit 1
+        ;;
+esac
+
+
+# Output all further commands
+set -x
+
+# Clean up disk. Destroys ALL data!
+zpool destroy -f $POOL_NAME || :
+gpart destroy -F $DISK_DEVICE || :
+
+# Create GPT partition
+gpart create -s gpt $DISK_DEVICE
+
+# Bootloader and swap
+gpart  add  -s  222  -a  4k           -t  freebsd-boot  -l  boot0  $DISK_DEVICE
+gpart  add  -s  2g   -a  4k           -t  freebsd-swap  -l  swap0  $DISK_DEVICE
+gpart  add           -a  4k           -t  freebsd-zfs   -l  disk0  $DISK_DEVICE
+gpart bootcode -b /boot/pmbr -p /boot/gptzfsboot -i 1 $DISK_DEVICE
+
+# Load kernel module
+kldload zfs || :
+
+# Create pool
+zpool create -f -o altroot=/mnt -O canmount=off -m none $POOL_NAME /dev/gpt/disk0
+
+# Create ZFS filesystem hierarchy
+zfs set checksum=fletcher4                                           $POOL_NAME
+zfs set atime=off                                                    $POOL_NAME
+
+zfs create   -o mountpoint=none                                      $POOL_NAME/ROOT
+zfs create   -o mountpoint=/                                         $POOL_NAME/ROOT/default
+
+zfs create   -o mountpoint=/tmp -o compression=lz4   -o setuid=off   $POOL_NAME/tmp
+chmod 1777 /mnt/tmp
+
+zfs create   -o mountpoint=/usr                                      $POOL_NAME/usr
+zfs create                                                           $POOL_NAME/usr/local
+
+zfs create   -o mountpoint=/home                     -o setuid=off   $POOL_NAME/home
+zfs create   -o mountpoint=/data                                     $POOL_NAME/data
+
+zfs create   -o compression=lz4                      -o setuid=off   $POOL_NAME/usr/ports
+zfs create   -o compression=off      -o exec=off     -o setuid=off   $POOL_NAME/usr/ports/distfiles
+zfs create   -o compression=off      -o exec=off     -o setuid=off   $POOL_NAME/usr/ports/packages
+
+zfs create   -o compression=lz4      -o exec=off     -o setuid=off   $POOL_NAME/usr/src
+zfs create                                                           $POOL_NAME/usr/obj
+
+zfs create   -o mountpoint=/var                                      $POOL_NAME/var
+zfs create   -o compression=lz4      -o exec=off     -o setuid=off   $POOL_NAME/var/crash
+zfs create                           -o exec=off     -o setuid=off   $POOL_NAME/var/db
+zfs create   -o compression=lz4      -o exec=on      -o setuid=off   $POOL_NAME/var/db/pkg
+zfs create                           -o exec=off     -o setuid=off   $POOL_NAME/var/empty
+zfs create   -o compression=lz4      -o exec=off     -o setuid=off   $POOL_NAME/var/log
+zfs create   -o compression=gzip     -o exec=off     -o setuid=off   $POOL_NAME/var/mail
+zfs create                           -o exec=off     -o setuid=off   $POOL_NAME/var/run
+zfs create   -o compression=lz4      -o exec=on      -o setuid=off   $POOL_NAME/var/tmp
+chmod 1777 /mnt/var/tmp
+
+# Set the dataset to boot from
+zpool set bootfs=$POOL_NAME/ROOT/default $POOL_NAME

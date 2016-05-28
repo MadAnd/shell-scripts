@@ -1,0 +1,257 @@
+#!/usr/bin/env bash
+
+####################################################################################
+# Copyright (c) 2016 Andriy Kmit'                                                  #
+#                                                                                  #
+# Permission is hereby granted, free of charge, to any person obtaining a copy of  #
+# this software and associated documentation files (the "Software"), to deal in    #
+# the Software without restriction, including without limitation the rights to     #
+# use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of #
+# the Software, and to permit persons to whom the Software is furnished to do so,  #
+# subject to the following conditions:                                             #
+#                                                                                  #
+# The above copyright notice and this permission notice shall be included in all   #
+# copies or substantial portions of the Software.                                  #
+#                                                                                  #
+# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR       #
+# IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS #
+# FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR   #
+# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER   #
+# IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN          #
+# CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.       #
+####################################################################################
+
+##############################################################
+# Script for automation of the FreeBSD installation process. #
+##############################################################
+
+set -eu
+
+HOST_NAME="example.com"
+
+RELEASE_FTP="ftp://ftp.de.freebsd.org/pub/FreeBSD/releases/amd64/10.3-RELEASE/"
+CONFIG_FILES_BASE_URL="http://pub.madand.net/configs/freebsd/"
+
+# All partitions should already be mounted under the given path.
+ROOT_MOUNT_POINT=/mnt
+NEWTWORK_INTERFACE="vtnet0"
+SSH_PORT=20022
+
+########################################################################
+
+if [ $UID -ne 0 ]; then
+    echo 'Please run me as root!'
+    exit 1
+fi
+
+
+# Output all further commands
+set -x
+
+cd "$ROOT_MOUNT_POINT"
+
+mkdir dev || :
+mount -t devfs devfs dev
+
+# Fetch release files
+fetch ${RELEASE_FTP}base.txz
+fetch ${RELEASE_FTP}kernel.txz
+fetch ${RELEASE_FTP}games.txz
+
+# Extract release files
+tar xjpf base.txz
+tar xjpf kernel.txz
+tar xjpf games.txz
+
+rm *.txz
+
+# This MUST be ran after the extraction of the base system!!!
+zfs set readonly=on zroot/var/empty
+
+ln -s /usr/share/zoneinfo/Europe/Kiev etc/localtime
+
+echo > etc/motd
+
+echo 'security.bsd.see_other_uids=0' >> /etc/sysctl.conf
+echo 'security.bsd.see_other_gids=0' >> /etc/sysctl.conf
+
+mkdir -p compat/linux/proc
+cat <<EOF > etc/fstab
+# Device               Mountpoint              FStype    Options         Dump    Pass#
+/dev/gpt/swap0         none                    swap      sw              0       0
+
+fdesc                  /dev/fd                 fdescfs   rw              0       0
+linproc                /compat/linux/proc      linprocfs rw,late         0       0
+EOF
+
+cat <<EOF > etc/resolv.conf
+search your-server.de
+nameserver 213.133.98.98
+nameserver 213.133.99.99
+nameserver 213.133.100.100
+nameserver 8.8.8.8
+EOF
+
+cat <<EOF > boot/loader.conf
+autoboot_delay="3"
+beastie_disable="YES"
+zfs_load="YES"
+EOF
+
+cat <<EOF > etc/rc.conf
+hostname="$HOST_NAME"
+ifconfig_$NEWTWORK_INTERFACE="DHCP"
+
+# Basic
+dumpdev="AUTO"
+zfs_enable="YES"
+fsck_y_enable="YES"
+
+# Core services
+pf_enable="YES"
+sshd_enable="YES"
+ntpd_enable="YES"
+
+# DNS
+nsd_enable="YES"
+
+# Email
+dovecot_enable="YES"
+postgrey_enable="YES"
+postgrey_flags="--unix=/var/run/postgrey.pipe"
+postfix_enable="YES"
+sendmail_enable="NO"
+sendmail_submit_enable="NO"
+sendmail_outbound_enable="NO"
+sendmail_msp_queue_enable="NO"
+
+# Web
+nginx_enable="YES"
+php_fpm_enable="YES"
+
+# Database
+postgresql_enable="YES"
+mysql_enable="YES"
+#mysql_dbdir="/data/db/mysql"
+#mysql_args="--skip-grant-tables"
+
+# IM
+ejabberd_enable="YES"
+
+# Torrent
+transmission_enable="YES"
+transmission_conf_dir="/data/transmission/home"
+transmission_download_dir="/data/transmission/home/Downloads"
+EOF
+
+cat <<EOF > etc/pf.conf
+# Macros
+in_if="$NEWTWORK_INTERFACE"
+icmp_types = "echoreq"
+
+# Params
+scrub in all
+
+# Allow all OUT traffic
+pass out on \$in_if proto { tcp, udp } all
+
+# Defualt rule for IN traffic
+block in on \$in_if
+
+# Allow SSH($SSH_PORT)
+pass in quick on \$in_if proto tcp from any to \$in_if port $SSH_PORT
+
+# Mail: SMTP(25), SMTP-submission(587), IMAP(143), ManageSieve(4190)
+pass in quick on \$in_if proto tcp from any to \$in_if port {25, 143, 587, 4190}
+
+# HTTP(80), HTTPS(443)
+pass in quick on \$in_if proto tcp from any to \$in_if port {80, 443}
+
+# DNS
+pass in quick on \$in_if proto { tcp, udp } from any to \$in_if port 53
+
+# Jabber: c2s(5222), s2s(5269), STUN(3478), HTTP-Plain(5280), HTTP-TLS(5281)
+pass in quick on \$in_if proto tcp from any to \$in_if port {5222, 5269, 5280, 5281}
+pass in quick on \$in_if proto udp from any to \$in_if port 3478
+
+# Transmission seeding port (51413)
+pass in quick on \$in_if proto { tcp, udp } from any to \$in_if port 51413
+
+# ICMP echo
+pass inet proto icmp all icmp-type \$icmp_types
+EOF
+
+cat <<EOF >> etc/profile
+
+export PAGER=less
+
+export LANG="en_US.UTF-8"
+export LC_CTYPE="en_US.UTF-8"
+export LC_COLLATE="POSIX"
+export LC_ALL="en_US.UTF-8"
+EOF
+
+
+cat <<EOF >> etc/crontab
+
+# Ports tree update
+@daily                                  root    portsnap cron update >/dev/null
+
+# Check for FreeBSD updates
+@daily                                  root    freebsd-update cron
+EOF
+
+# Update sshd config
+sed -E -i '' \
+    -e "s/#(Port) [0-9]+/\1 $SSH_PORT/" \
+    -e 's/#(ChallengeResponseAuthentication) yes/\1 no/' \
+    -e 's/#(UseDNS) yes/\1 no/' \
+    etc/ssh/sshd_config
+
+# Exclude system sources from updates
+sed -E -i '' 's/(Components) src/\1/' etc/freebsd-update.conf
+
+# Install essential packages
+chroot . pkg install -y postfix bash bash-completion sudo git gtar tmux coreutils vim-lite curl
+
+# Vital Vim config additions
+cat <<EOF >> usr/local/etc/vim/vimrc
+
+set et sw=4 ts=4
+
+noremap ; :
+noremap : ;
+EOF
+
+# Enable sudo for members of wheel
+sed -E -i '' '1,/# %wheel/s/# (%wheel)/\1/' usr/local/etc/sudoers
+
+# Lock root account. sudo -s FTW.
+chroot . pw lock root
+
+# Get shell config files for root
+fetch "${CONFIG_FILES_BASE_URL}bashrc.txt" -o root/.bashrc
+fetch "${CONFIG_FILES_BASE_URL}bash_aliases.txt" -o root/.bash_aliases
+fetch "${CONFIG_FILES_BASE_URL}bash_profile.txt" -o root/.bash_profile
+fetch "${CONFIG_FILES_BASE_URL}dir_colors.txt" -o root/.dir_colors
+
+echo "Add new admin (wheel) account. Leave empty if you don't want to do this now."
+read -p 'login: ' userlogin
+if [ -n "$userlogin" ]; then
+    chroot . pw useradd $userlogin -m -G wheel -s /usr/local/bin/bash
+    chroot . passwd $userlogin
+    echo -e "\nAllowUsers $userlogin" >> etc/ssh/sshd_config
+
+    cp root/.bash* home/$userlogin
+    cp root/.dir_colors home/$userlogin
+    chroot . chown -R $userlogin /home/$userlogin
+
+    chroot . /usr/local/bin/sudo -u $userlogin sh -c \
+           'cd ~; curl -Lo- https://raw.github.com/madand/tmuxrc/master/bootstrap.sh | bash'
+else
+    echo 'skipping create user set.'
+fi
+
+# For me portsnap thrown corrupted file error on new installations, so I just
+# copy ports from installed system. See a script copy-ports-via-ssh.
+# chroot . portsnap fetch extract
