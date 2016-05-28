@@ -108,7 +108,7 @@ archive_user_files() {
 }
 
 # USAGE: extract_user_files USER-NAME
-# Archive files of the given user.
+# Extract archived files of the given user.
 extract_user_files() {
     [ $# -ne 1 ] && { echo 'USAGE: extract_user_files USER-NAME'; exit 1; }
 
