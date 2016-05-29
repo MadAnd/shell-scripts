@@ -257,7 +257,7 @@ if [ -n "$userlogin" ]; then
     chroot . /usr/local/bin/sudo -u $userlogin sh -c \
            'cd ~; curl -Lo- "https://raw.github.com/madand/tmuxrc/master/bootstrap.sh" | bash'
 else
-    echo 'skipping create user set.'
+    echo 'Skipped user creation.'
 fi
 
 # For me portsnap thrown corrupted file error on new installations, so I just
