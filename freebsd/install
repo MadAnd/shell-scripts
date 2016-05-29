@@ -72,8 +72,8 @@ ln -s /usr/share/zoneinfo/Europe/Kiev etc/localtime
 
 echo > etc/motd
 
-echo 'security.bsd.see_other_uids=0' >> /etc/sysctl.conf
-echo 'security.bsd.see_other_gids=0' >> /etc/sysctl.conf
+echo 'security.bsd.see_other_uids=0' >> etc/sysctl.conf
+echo 'security.bsd.see_other_gids=0' >> etc/sysctl.conf
 
 mkdir -p compat/linux/proc
 cat <<EOF > etc/fstab
