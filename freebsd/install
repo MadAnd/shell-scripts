@@ -235,6 +235,9 @@ fetch "${CONFIG_FILES_BASE_URL}bash_aliases.txt" -o root/.bash_aliases
 fetch "${CONFIG_FILES_BASE_URL}bash_profile.txt" -o root/.bash_profile
 fetch "${CONFIG_FILES_BASE_URL}dir_colors.txt" -o root/.dir_colors
 
+# Vim config for root
+chroot .  sh -c 'cd /root; curl -Lo- "https://raw.githubusercontent.com/MadAnd/dotvim/master/install.sh" | bash'
+
 echo "Add new admin (wheel) account. Leave empty if you don't want to do this now."
 read -p 'login: ' userlogin
 if [ -n "$userlogin" ]; then
@@ -246,8 +249,13 @@ if [ -n "$userlogin" ]; then
     cp root/.dir_colors home/$userlogin
     chroot . chown -R $userlogin /home/$userlogin
 
+    # Vim config for root
     chroot . /usr/local/bin/sudo -u $userlogin sh -c \
-           'cd ~; curl -Lo- https://raw.github.com/madand/tmuxrc/master/bootstrap.sh | bash'
+           'cd ~; curl -Lo- "https://raw.githubusercontent.com/MadAnd/dotvim/master/install.sh" | bash'
+
+    # Tmux config for user
+    chroot . /usr/local/bin/sudo -u $userlogin sh -c \
+           'cd ~; curl -Lo- "https://raw.github.com/madand/tmuxrc/master/bootstrap.sh" | bash'
 else
     echo 'skipping create user set.'
 fi
